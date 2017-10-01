@@ -1,0 +1,357 @@
+---
+title: "Final Assessment Practical Machine Learning"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading in the data
+
+First we load caret and read in the data.
+
+
+```{r readin}
+library(caret);
+setwd("C:/Users/constantin/dat/projekte/DataScience/DataScienceSpec/practlearning/wd");
+dftrain<-read.csv("pml-training.csv");
+dftest<-read.csv("pml-testing.csv");
+```
+
+
+## Slicing the Data for Cross-Validation
+
+We decide to silce the data in 5 junks for using later cross-validation.
+
+```{r slicing}
+folds<-createFolds(y=dftrain$classe,k=5,list=TRUE, returnTrain=TRUE)
+
+```
+
+## First try: Using all Features and ignoring "Time"-Aspect
+So our first approach is to ignore the "time" aspect. This means we do not take features in account, that say 
+something about the time, when the record was recorded.Besides this we want to consider all "physical" 
+features that could help us, predicting later the "classe"-Variable of the "test"-Dataset. 
+(We only take features into account, that are filled and have not an "NA"-Column in the test dataset.)
+
+```{r first try}
+formula<-classe~roll_belt+pitch_belt+yaw_belt+total_accel_belt+gyros_belt_x+gyros_belt_y+gyros_belt_z+accel_belt_x+
+accel_belt_y+accel_belt_z+magnet_belt_x+magnet_belt_y+magnet_belt_z+roll_arm+pitch_arm+yaw_arm+total_accel_arm+
+gyros_arm_x+gyros_arm_y+gyros_arm_z+accel_arm_x+accel_arm_y+accel_arm_z+magnet_arm_x+magnet_arm_y+magnet_arm_z+
+roll_dumbbell+pitch_dumbbell+yaw_dumbbell+total_accel_dumbbell+gyros_dumbbell_x+gyros_dumbbell_y+gyros_dumbbell_z+
+accel_dumbbell_x+accel_dumbbell_y+accel_dumbbell_z+magnet_dumbbell_x+magnet_dumbbell_y+magnet_dumbbell_z+roll_forearm+
+pitch_forearm+yaw_forearm+total_accel_forearm+gyros_forearm_x+gyros_forearm_y+gyros_forearm_z+accel_forearm_x+accel_forearm_y+
+accel_forearm_z+magnet_forearm_x+magnet_forearm_y+magnet_forearm_z
+
+countOfSamples<-0
+right<-0  
+for(i in 1:length(folds)){
+  
+  train<-dftrain[folds[[i]],]
+  test<-dftrain[-folds[[i]],]
+
+  countOfSamples<-countOfSamples+dim(test)[1]
+  modfit<-train(formula,method="rpart",data=train)
+  ergs<-predict(modfit,test)
+  right<-right+sum(ergs==test$classe)
+  
+  
+}
+
+print("Correctly predicted:")
+print(right)
+print("Total Amount:")
+print(countOfSamples)
+print("Accuracy:")
+print(right/countOfSamples)
+
+```
+The Accuracy is about 0.5. That is not really good.
+
+## Second try: Taking time especially the "num_window" feature into account.
+Because our first try was not really successful, we decide to integrate the time aspect.
+Because the num_window feature is also present in the test-dataset and the instructions allow us 
+really to use all features to predict the classe-Variable, we will integrate it in our model.
+
+First take a look at the relation between "num_window" and "classe":
+
+```{r dependence on num_window}
+
+plot(dftrain$num_window,dftrain$classe)
+
+```
+So the lines hardly ever do overlap. That is a good sign. But to concenctrate its information, we create
+ some self-defined features. We will count the different classes for each "num_window" and create some Indicator features, that will indicate if a certain classe is the most recent for this "num_window".
+
+```{r defining own features}
+mostRecent<-function(x){
+  names(sort(table(x),decreasing = TRUE))[1]
+}
+
+genWindowModel <-function(data){
+ 
+   classeAWindows<-c()
+   classeBWindows<-c()
+   classeCWindows<-c()
+   classeDWindows<-c()
+   classeEWindows<-c()
+   
+   windows<-unique(data$num_window)
+   
+   for(window in windows){
+     mostRecentClass<-mostRecent(data[data$num_window==window,]$classe)
+    
+      if(mostRecentClass=="A"){
+        classeAWindows<-c(classeAWindows,window)
+      }
+     
+     if(mostRecentClass=="B"){
+       classeBWindows<-c(classeBWindows,window)
+     }
+     
+     if(mostRecentClass=="C"){
+       classeCWindows<-c(classeCWindows,window)
+     }
+     
+     if(mostRecentClass=="D"){
+       classeDWindows<-c(classeDWindows,window)
+     }
+     
+     if(mostRecentClass=="E"){
+       classeEWindows<-c(classeEWindows,window)
+     }
+     
+   }
+   
+   list(classeAWindows,
+        classeBWindows,
+        classeCWindows,
+        classeDWindows,
+        classeEWindows)
+   
+}
+
+addFeatures <- function(model, data){
+    l<-dim(data)[1]
+    data$classeAIndicator<-0*l
+    data$classeBIndicator<-0*l
+    data$classeCIndicator<-0*l
+    data$classeDIndicator<-0*l
+    data$classeEIndicator<-0*l
+    
+    for(i in 1:l){
+      
+      v<-data[i,]$num_window
+      
+      if(v %in% model[[1]]){
+        data$classeAIndicator[i]<-1
+      }
+      
+      if(v %in% model[[2]]){
+        data$classeBIndicator[i]<-1
+      }
+      
+      if(v %in% model[[3]]){
+        data$classeCIndicator[i]<-1
+      }
+      
+      if(v %in% model[[4]]){
+        data$classeDIndicator[i]<-1
+      }
+      
+      if(v %in% model[[5]]){
+        data$classeEIndicator[i]<-1
+      }
+      
+    }
+    
+    data
+}
+```
+
+We now add this features to our model and use cross validation to determine the expected error-rate:
+
+```{r next try}
+formula<-classe~roll_belt+pitch_belt+yaw_belt+total_accel_belt+gyros_belt_x+gyros_belt_y+gyros_belt_z+accel_belt_x+
+  accel_belt_y+accel_belt_z+magnet_belt_x+magnet_belt_y+magnet_belt_z+roll_arm+pitch_arm+yaw_arm+total_accel_arm+
+  gyros_arm_x+gyros_arm_y+gyros_arm_z+accel_arm_x+accel_arm_y+accel_arm_z+magnet_arm_x+magnet_arm_y+magnet_arm_z+
+  roll_dumbbell+pitch_dumbbell+yaw_dumbbell+total_accel_dumbbell+gyros_dumbbell_x+gyros_dumbbell_y+gyros_dumbbell_z+
+  accel_dumbbell_x+accel_dumbbell_y+accel_dumbbell_z+magnet_dumbbell_x+magnet_dumbbell_y+magnet_dumbbell_z+roll_forearm+
+  pitch_forearm+yaw_forearm+total_accel_forearm+gyros_forearm_x+gyros_forearm_y+gyros_forearm_z+accel_forearm_x+accel_forearm_y+accel_forearm_z+magnet_forearm_x+magnet_forearm_y+magnet_forearm_z+classeAIndicator+classeBIndicator+classeCIndicator+classeDIndicator+classeEIndicator
+
+options(warn=-1)
+
+countOfSamples<-0
+right<-0  
+for(i in 1:length(folds)){
+  
+  train<-dftrain[folds[[i]],]
+  test<-dftrain[-folds[[i]],]
+  
+  countOfSamples<-countOfSamples+dim(test)[1]
+  
+  windowModel<-genWindowModel(train)
+  train<-addFeatures(windowModel,train)
+  test<-addFeatures(windowModel,test)
+  
+  modfit<-train(formula,method="rpart",data=train)
+  ergs<-predict(modfit,test)
+  right<-right+sum(ergs==test$classe)
+  
+}
+
+print("Correctly predicted:")
+print(right)
+print("Total Amount:")
+print(countOfSamples)
+print("Accuracy:")
+print(right/countOfSamples)
+```
+So the accuracy is about 0.66 and quite better, but not good enough.
+
+## One more try: Using Linear Regression (instead of bagging and boosting) to optimize the accuracy
+
+We could try to use bagging and boosting for optimizing our model. But we want to give another approach a try.
+We convert the "classe"-Variable into a Numeric-Variable and try to predict it with linear regression.
+First we write some functions to convert from factor to numeric and vice versa:
+
+```{r conversion}
+addConvertClassToNumeric <- function(data){
+  l<-dim(data)[1]
+  data$classeNum<-0*l
+  
+  for(i in 1:l){
+    
+    v<-data[i,]$classe
+    
+    if(v =="A"){
+      data$classeNum[i]<-1
+    }
+    
+    if(v =="B"){
+      data$classeNum[i]<-2
+    }
+    
+    if(v =="C"){
+      data$classeNum[i]<-3
+    }
+    
+    if(v =="D"){
+      data$classeNum[i]<-4
+    }
+    
+    if(v =="E"){
+      data$classeNum[i]<-5
+    }
+  }
+  
+  data
+}
+
+convertNumericToClass <- function(vec){
+  l<-length(vec)
+  result<-c()
+  
+  for(i in 1:l){
+    
+    if(vec[i] ==1){
+      result[i]<-"A"
+    }
+    if(vec[i] ==2){
+      result[i]<-"B"
+    }
+    if(vec[i] ==3){
+      result[i]<-"C"
+    }
+    if(vec[i] ==4){
+      result[i]<-"D"
+    }
+    if(vec[i] ==5){
+      result[i]<-"E"
+    }
+    
+  }
+  
+  factor(x=result,levels=c("A","B","C","D","E"))
+}
+
+
+```
+
+No we use cross validation again to evaluate the model:
+
+```{r LM-Try}
+formula<-classeNum~roll_belt+pitch_belt+yaw_belt+total_accel_belt+gyros_belt_x+gyros_belt_y+gyros_belt_z+accel_belt_x+
+  accel_belt_y+accel_belt_z+magnet_belt_x+magnet_belt_y+magnet_belt_z+roll_arm+pitch_arm+yaw_arm+total_accel_arm+
+  gyros_arm_x+gyros_arm_y+gyros_arm_z+accel_arm_x+accel_arm_y+accel_arm_z+magnet_arm_x+magnet_arm_y+magnet_arm_z+
+  roll_dumbbell+pitch_dumbbell+yaw_dumbbell+total_accel_dumbbell+gyros_dumbbell_x+gyros_dumbbell_y+gyros_dumbbell_z+
+  accel_dumbbell_x+accel_dumbbell_y+accel_dumbbell_z+magnet_dumbbell_x+magnet_dumbbell_y+magnet_dumbbell_z+roll_forearm+
+  pitch_forearm+yaw_forearm+total_accel_forearm+gyros_forearm_x+gyros_forearm_y+gyros_forearm_z+accel_forearm_x+accel_forearm_y+accel_forearm_z+magnet_forearm_x+magnet_forearm_y+magnet_forearm_z+classeAIndicator+classeBIndicator+classeCIndicator+classeDIndicator+classeEIndicator
+
+countOfSamples<-0
+right<-0  
+for(i in 1:length(folds)){
+  
+  train<-dftrain[folds[[i]],]
+  test<-dftrain[-folds[[i]],]
+  
+  countOfSamples<-countOfSamples+dim(test)[1]
+  
+  windowModel<-genWindowModel(train)
+  train<-addFeatures(windowModel,train)
+  train<-addConvertClassToNumeric(train)
+  test<-addFeatures(windowModel,test)
+  test<-addConvertClassToNumeric(test)
+  
+  modfit<-train(formula,method="lm",data=train)
+  ergs<-predict(modfit,test)
+  right<-right+sum(round(ergs)==test$classeNum)
+  
+}
+
+print("Correctly predicted:")
+print(right)
+print("Total Amount:")
+print(countOfSamples)
+print("Accuracy:")
+print(right/countOfSamples)
+
+```
+
+That looks better ! 
+
+## Final Application to Test-Set
+
+```{r Application to test set}
+formula<-classeNum~roll_belt+pitch_belt+yaw_belt+total_accel_belt+gyros_belt_x+gyros_belt_y+gyros_belt_z+accel_belt_x+
+  accel_belt_y+accel_belt_z+magnet_belt_x+magnet_belt_y+magnet_belt_z+roll_arm+pitch_arm+yaw_arm+total_accel_arm+
+  gyros_arm_x+gyros_arm_y+gyros_arm_z+accel_arm_x+accel_arm_y+accel_arm_z+magnet_arm_x+magnet_arm_y+magnet_arm_z+
+  roll_dumbbell+pitch_dumbbell+yaw_dumbbell+total_accel_dumbbell+gyros_dumbbell_x+gyros_dumbbell_y+gyros_dumbbell_z+
+  accel_dumbbell_x+accel_dumbbell_y+accel_dumbbell_z+magnet_dumbbell_x+magnet_dumbbell_y+magnet_dumbbell_z+roll_forearm+
+  pitch_forearm+yaw_forearm+total_accel_forearm+gyros_forearm_x+gyros_forearm_y+gyros_forearm_z+accel_forearm_x+accel_forearm_y+
+  accel_forearm_z+magnet_forearm_x+magnet_forearm_y+magnet_forearm_z+classeAIndicator+classeBIndicator+classeCIndicator+classeDIndicator+classeEIndicator
+
+countOfSamples<-0
+right<-0  
+
+train<-dftrain
+test<-dftest
+  
+windowModel<-genWindowModel(train)
+train<-addFeatures(windowModel,train)
+train<-addConvertClassToNumeric(train)
+test<-addFeatures(windowModel,test)
+
+  
+modfit<-train(formula,method="lm",data=train)
+ergs<-predict(modfit,test)
+
+print(convertNumericToClass(round(ergs)))
+```
+
+Filling out the prediction quizz we find out, that our accuracy is 100%.
+
+## Summary
+Depending on, if we include the "time"-aspect or not, our accuracy for predicting an out sample record will be between
+0.5 and 1.0.
